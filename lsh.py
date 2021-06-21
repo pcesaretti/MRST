@@ -1,14 +1,34 @@
-import pickle as cPickle
 import random
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
 from numba import njit
 from math import sqrt
 
 colors = [ 'r', 'b','c', 'g', 'y', 'k', 'm', 'r']
 
-#meant to temporary for until real time data is gotten
+def mkdir_p(mypath):
+    '''Creates a directory. equivalent to using mkdir -p on the command line'''
+    from errno import EEXIST
+    from os import makedirs,path
+    try:
+        makedirs(mypath)
+    except OSError as exc: # Python >2.5
+        if exc.errno == EEXIST and path.isdir(mypath):
+            pass
+        else: raise
+
+def fillTrajNumba(trajectories):
+    max_length = max(map(len, trajectories))
+    trajectoriesNumba = np.empty((len(trajectories), max_length, 3), dtype='float')
+    trajectoriesNumba.fill(-1)
+
+    for i in range(len(trajectories)):
+        for j in range(len(trajectories[i])):
+            trajectoriesNumba[i][j] = trajectories[i][j]
+
+    return trajectoriesNumba
+
+# meant to be temporary until real time data is gotten
 def addRandomTimeDim(trajectories):
 
     for trajectory in trajectories:
@@ -144,9 +164,33 @@ def makeCdist(trajectories, cs, vs):
 # create a signature that will note the order of circles in which a trajectory is located;
 # if a coordinate of the trajectory is located within a circle, c[i] with radius Rs[i], then
 # we append the index of that circle to an array called edit_string.
-#@njit
 @njit
 def editVector(trajectories, cs, Rs):
+    
+    n = len(cs)
+    ed = np.empty((len(trajectories),n+1), dtype='int')
+    ed.fill(-1)
+
+    for j in range(len(trajectories)):
+        v = np.zeros(n)
+        es_index = 1
+        for i in range(n):
+            xcircle, ycircle = cs[i]
+            for x, y in trajectories[j]:
+                if(x == 0 and y == 0):
+                    break
+                elif ((x - xcircle)**2 + (y - ycircle)**2 < Rs[i]**2
+                    and v[i] != 1):
+                        v[i] = 1
+                        ed[j][es_index] = i
+                        es_index = es_index + 1
+        ed[j][0] = es_index
+
+    return ed
+
+
+@njit
+def editVector3d(trajectories, cs, Rs):
     
     n = len(cs)
     ed = np.empty((len(trajectories),n+1), dtype='int')
