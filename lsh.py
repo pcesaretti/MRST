@@ -4,7 +4,90 @@ import numpy as np
 from numba import njit
 from math import sqrt
 
+from numpy.lib.function_base import percentile
+
 colors = [ 'r', 'b','c', 'g', 'y', 'k', 'm', 'r']
+colorsNew = ['c', 'g', 'y', 'm']
+
+def plotQueryAndClosest(query, trajectories, possibleClosestTrajIndices, closestTrajIdx, trueClosestTrajIdx):
+    fig = plt.figure()
+    ax = fig.add_subplot(projection='3d')
+
+    ax.scatter([a for [a,b,c] in query],[b for [a,b,c] in query], [c for [a,b,c] in query], color = 'black', s=20, label='query')
+    ax.scatter([a for [a,b,c] in trajectories[trueClosestTrajIdx]],[b for [a,b,c] in trajectories[trueClosestTrajIdx]], [c for [a,b,c] in trajectories[trueClosestTrajIdx]], color = 'blue', s=20, label='true closest traj')
+
+    c = 0
+    for index in possibleClosestTrajIndices:
+        if index == -1:
+            break
+        if(index == closestTrajIdx):
+            colorval = 'red'
+            sval = 20
+            ax.scatter([a for [a,b,c] in trajectories[index]],[b for [a,b,c] in trajectories[index]], [c for [a,b,c] in trajectories[index]], color = colorval, s=sval, label='found closest traj')
+        else:
+            sval = 3
+            colorval = colorsNew[c%4]
+            c = c+1
+            ax.scatter([a for [a,b,c] in trajectories[index]],[b for [a,b,c] in trajectories[index]], [c for [a,b,c] in trajectories[index]], color = colorval, s=sval)
+    
+    plt.axis('auto')
+    ax.legend()
+    plt.show()
+
+def scale_time(trajectories, S):  
+    for i in range(len(trajectories)):
+        for j in range(len(trajectories[i])):
+            trajectories[i][j][2] = trajectories[i][j][2] * S
+    
+    return trajectories
+
+@njit
+def scale_time_numba(trajectories, S):  
+    for i in range(len(trajectories)):
+        for j in range(len(trajectories[i])):
+            if(trajectories[i][j][0] == -1):
+                break
+            trajectories[i][j][2] = trajectories[i][j][2] * S
+    
+    return trajectories
+
+@njit
+def find_avg_speed(trajectories):
+
+    avgSpeedAllTraj = 0
+    for i in range(len(trajectories)):
+        distanceCoveredByTraj = 0
+        startTime = trajectories[i][0][2]
+        endTime = -1
+        speedTraj = 0
+        for j in range(len(trajectories[i])-1):
+            if(trajectories[i][j+1][0] == -1):
+                endTime = trajectories[i][j][2]
+                break
+            distanceCoveredByTraj =  distanceCoveredByTraj + sqrt( (trajectories[i][j+1][0]-trajectories[i][j][0])**2 +
+                                                                       (trajectories[i][j+1][1]-trajectories[i][j][1])**2 )
+        if endTime == -1:
+            endTime = trajectories[i][j][2]
+        if endTime != startTime:
+            speedTraj = distanceCoveredByTraj/(endTime-startTime)
+        avgSpeedAllTraj = avgSpeedAllTraj + speedTraj
+
+    avgSpeedAllTraj = avgSpeedAllTraj/len(trajectories)
+    return avgSpeedAllTraj
+
+
+def hamming_distance(a, b):
+    ret = 0
+    if len(a) > len(b):
+        b = np.pad(b, (len(a) - len(b), 0), 'constant')
+    else:
+        a = np.pad(a, (len(b) - len(a), 0), 'constant')
+    
+    for i in range(len(a)):
+        if a[i] != b[i]:
+            ret = ret + 1
+
+    return ret
 
 def mkdir_p(mypath):
     '''Creates a directory. equivalent to using mkdir -p on the command line'''
@@ -19,7 +102,7 @@ def mkdir_p(mypath):
 
 def fillTrajNumba(trajectories):
     max_length = max(map(len, trajectories))
-    trajectoriesNumba = np.empty((len(trajectories), max_length, 3), dtype='float')
+    trajectoriesNumba = np.empty((len(trajectories), max_length, len(trajectories[0][0])), dtype='float')
     trajectoriesNumba.fill(-1)
 
     for i in range(len(trajectories)):
@@ -37,7 +120,7 @@ def addRandomTimeDim(trajectories):
                 trajectory[i].append( random.uniform(0,1000) )
                 continue
             randomTime = trajectory[i-1][2] + sqrt( (trajectory[i][0]-trajectory[i-1][0])**2 +
-                                                    (trajectory[i][1]-trajectory[i-1][1])**2 ) * (random.uniform(0.5, 1.5))
+                                                    (trajectory[i][1]-trajectory[i-1][1])**2 ) * (random.uniform(0.8, 1.2))
             trajectory[i]. append(randomTime)
 
 def findCircles(trajectories, n):
@@ -254,6 +337,23 @@ def levenshtein(s, t):
 # What is returned is a collection or set of tuples, (k, i, j), where k 
 # is the value on a specific distance measure (i.e. edit distance) 
 # and i and j are trajectories.
+def findPairs(eA, m):
+
+    answer = []
+    added = np.zeros((len(eA), len(eA)))
+
+    for k in range(m+1):
+        for i in range(len(eA)):
+            v = []
+            for j in range(len(eA)):
+                if (added[i,j] == 0):
+                    if (eA[i,j] == k):
+                        added[i, j] = added[j, i] = 1
+                        v.append((k, i, j))
+            if v:
+                answer.append(v)
+    return np.array(answer, dtype='object')
+
 # NOT USED AS THIS IS SIGNIFICANTLY SLOWER 
 @njit
 def findPairs2(eA, m):
@@ -283,27 +383,29 @@ def findPairs2(eA, m):
 
     return answer_new
 
-def findPairs(eA, m):
-
-    answer = []
-    added = np.zeros((len(eA), len(eA)))
-
-    for k in range(m+1):
-        for i in range(len(eA)):
-            v = []
-            for j in range(len(eA)):
-                if (added[i,j] == 0):
-                    if (eA[i,j] == k):
-                        added[i, j] = added[j, i] = 1
-                        v.append((k, i, j))
-            if v:
-                answer.append(v)
-    return np.array(answer, dtype='object')
 
 # find the mean edit distance value for those set of trajectories, given by the argument 'answers', 
 # whose distance measure value equals m. Return an array of tuples, (DID, average), where DID
 # corresponds to the specific distance measure values and the average equals the mean of another 
 # distance metric for that set of trajectories.
+def findMean(answers, dA):
+
+    avg = []
+
+    max_DID = 0
+    for answer in answers:
+        value = 0	
+        for i in range(len(answer)):
+            DID, row, col = answer[i]
+            value += dA[row][col]
+
+        average = value/len(answer)
+        avg.append((DID, average))
+        if(max_DID < DID):
+            max_DID = DID
+
+    return np.array(avg), max_DID
+
 # NOT USED AS THIS IS SIGNIFICANTLY SLOWER 
 @njit
 def findMean2(answers, dA):
@@ -327,28 +429,45 @@ def findMean2(answers, dA):
 
     return avg_new
 
-def findMean(answers, dA):
-
-	avg = []
-
-	for answer in answers:
-		value = 0	
-		for i in range(len(answer)):
-			DID, row, col = answer[i]
-			value += dA[row][col]
-		
-		average = value/len(answer)
-		avg.append((DID, average))
-
-	return np.array(avg)
-
 # plot the average values of the edit distance for each disc intersection value
+def plotCorr(x_y_pair, max_DID):
 
-def plotCorr(x_y_pair):
+    x, y = map(list, (zip(*x_y_pair)))
 
-	x, y = map(list, (zip(*x_y_pair)))
+    binVals = dict()
+    for avgVal in x_y_pair:
+        binVals.setdefault(avgVal[0], []).append(avgVal[1])
 
-	plt.scatter(x,y, c ='r')
+    meanVals = []
+    pertile_5 = []
+    pertile_95 = []
+
+    pertile_10 = []
+    pertile_90 = []
+
+    pertile_25 = []
+    pertile_75 = []
+
+    pertile_x = []
+    for i in range(max_DID+1):
+        if i in binVals:
+            pertile_5.append(np.percentile(binVals[i], 5))
+            pertile_95.append(np.percentile(binVals[i], 95))
+
+            pertile_10.append(np.percentile(binVals[i], 10))
+            pertile_90.append(np.percentile(binVals[i], 90))
+
+            pertile_25.append(np.percentile(binVals[i], 25))
+            pertile_75.append(np.percentile(binVals[i], 75))
+
+            meanVals.append(np.mean(binVals[i]))
+            pertile_x.append(i)
+
+    #plt.scatter(x,y, c ='r')
+    plt.plot(pertile_x, meanVals, color = 'b')
+    plt.fill_between(pertile_x, pertile_95, pertile_5, color='red', alpha=0.2)
+    plt.fill_between(pertile_x, pertile_90, pertile_10, color='blue', alpha=0.2)
+    plt.fill_between(pertile_x, pertile_75, pertile_25, color='green', alpha=0.2)
 
 def correlco(mean):
 	
